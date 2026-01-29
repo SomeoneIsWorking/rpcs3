@@ -162,6 +162,7 @@ add_library(rpcs3_ui STATIC
     ../Input/ps_move_calibration.cpp
     ../Input/ps_move_config.cpp
     ../Input/ps_move_handler.cpp
+    ../Input/dolphinbar_handler.cpp
     ../Input/ps_move_tracker.cpp
     ../Input/raw_mouse_config.cpp
     ../Input/raw_mouse_handler.cpp

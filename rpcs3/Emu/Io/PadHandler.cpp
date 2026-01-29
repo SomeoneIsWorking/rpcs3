@@ -266,7 +266,7 @@ PadHandlerBase::connection PadHandlerBase::get_next_button_press(const std::stri
 		return status;
 	}
 
-	if (m_type == pad_handler::move)
+	if (m_type == pad_handler::move || m_type == pad_handler::dolphinbar)
 	{
 		// Keep the pad cached to reduce expensive one time requests
 		if (!m_pad_for_pad_settings || m_pad_for_pad_settings->m_pad_handler != m_type)

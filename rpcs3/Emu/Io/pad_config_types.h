@@ -11,6 +11,7 @@ enum class pad_handler
 	dualsense,
 	skateboard,
 	move,
+	dolphinbar,
 #ifdef _WIN32
 	xinput,
 	mm,

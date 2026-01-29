@@ -6,6 +6,7 @@
 #include "dualsense_pad_handler.h"
 #include "skateboard_pad_handler.h"
 #include "ps_move_handler.h"
+#include "dolphinbar_handler.h"
 #ifdef _WIN32
 #include "xinput_pad_handler.h"
 #include "mm_joystick_handler.h"
@@ -862,6 +863,8 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 		return std::make_shared<skateboard_pad_handler>();
 	case pad_handler::move:
 		return std::make_shared<ps_move_handler>();
+	case pad_handler::dolphinbar:
+		return std::make_shared<dolphinbar_handler>();
 #ifdef _WIN32
 	case pad_handler::xinput:
 		return std::make_shared<xinput_pad_handler>();
