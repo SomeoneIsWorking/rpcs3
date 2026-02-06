@@ -14,4 +14,14 @@ public:
 private:
 	u32 m_controller_index;
 	std::array<u8, 8> m_key{};
+
+	// Gyro/Accel tracking for aiming
+	f32 m_gyro_pitch = 0.0f;  // X-axis rotation
+	f32 m_gyro_yaw = 0.0f;    // Y-axis rotation
+	f32 m_accel_x = 0.0f;
+	f32 m_accel_y = 0.0f;
+	f32 m_accel_z = 0.0f;
+	s16 m_gun_x = 0;
+	s16 m_gun_y = 0;
+	bool m_use_gyro_aiming = true;  // Toggle for gyro-based aiming
 };

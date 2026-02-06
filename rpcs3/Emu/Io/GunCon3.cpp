@@ -6,6 +6,10 @@
 #include "Emu/Cell/lv2/sys_usbd.h"
 #include "Emu/system_config.h"
 #include "Input/pad_thread.h"
+#include "Emu/RSX/Overlays/overlay_debug_overlay.h"
+#include "Emu/RSX/Overlays/overlay_cursor.h"
+#include "Emu/RSX/Overlays/overlays.h"
+#include <cmath>
 
 LOG_CHANNEL(guncon3_log);
 
@@ -253,6 +257,7 @@ void usb_device_guncon3::interrupt_transfer(u32 buf_size, u8* buf, u32 endpoint,
 
 	const auto& cfg = ::at32(g_cfg_guncon3.players, m_controller_index);
 
+	// Get gyro/accel data from pad and use it for aiming
 	{
 		std::lock_guard lock(pad::g_pad_mutex);
 		const auto gamepad_handler = pad::get_pad_thread();
@@ -261,34 +266,124 @@ void usb_device_guncon3::interrupt_transfer(u32 buf_size, u8* buf, u32 endpoint,
 		if (pad->is_connected() && !pad->is_copilot())
 		{
 			cfg->handle_input(pad, true, input_callback);
+
+			// Get sensor data from pad (sensors 0-2 are accel X,Y,Z; 3-5 are gyro X,Y,Z)
+			if (pad->m_sensors.size() >= 6)
+			{
+				// Modern pads (DS4/DualSense/SDL) use signed values centered at 0.
+				// Scaling to roughly match SDL3's normalized units (m/s^2 and rad/s)
+				m_accel_x = static_cast<f32>(pad->m_sensors[0].m_value) / 16384.0f;
+				m_accel_y = static_cast<f32>(pad->m_sensors[1].m_value) / 16384.0f;
+				m_accel_z = static_cast<f32>(pad->m_sensors[2].m_value) / 16384.0f;
+
+				// Read gyro_z (roll axis used for yaw in sideways grip)
+				f32 gyro_z = static_cast<f32>(pad->m_sensors[5].m_value) / 1000.0f;
+
+				// Integrate gyro for aiming if gyro aiming is enabled
+				if (m_use_gyro_aiming)
+				{
+					// Sideways grip: Yaw (left/right)
+					const f32 gyro_sensitivity = 1000.0f;
+					m_gyro_yaw += gyro_z * gyro_sensitivity;
+
+					// Sideways grip: Pitch (up/down)
+					const f32 tilt_sensitivity = 65000.0f;
+					m_gyro_pitch = std::atan2(m_accel_x, std::sqrt(m_accel_y * m_accel_y + m_accel_z * m_accel_z)) * tilt_sensitivity;
+
+					// Clamp to valid range
+					m_gyro_yaw = std::clamp(m_gyro_yaw, -32767.0f, 32767.0f);
+					m_gyro_pitch = std::clamp(m_gyro_pitch, -32767.0f, 32767.0f);
+
+					// Set gun position from gyro
+					gc.gun_x = static_cast<s16>(m_gyro_yaw);
+					gc.gun_y = static_cast<s16>(m_gyro_pitch);
+
+					// Store for debug display
+					m_gun_x = gc.gun_x;
+					m_gun_y = gc.gun_y;
+				}
+			}
+			else if (pad->m_sensors.size() >= 4)
+			{
+				// Fallback fix for 4-sensor pads (removing bias)
+				m_accel_x = static_cast<f32>(pad->m_sensors[0].m_value) / 16384.0f;
+				m_accel_y = static_cast<f32>(pad->m_sensors[1].m_value) / 16384.0f;
+				m_accel_z = static_cast<f32>(pad->m_sensors[2].m_value) / 16384.0f;
+				f32 gyro_raw = static_cast<f32>(pad->m_sensors[3].m_value) / 1000.0f;
+
+				if (m_use_gyro_aiming)
+				{
+					const f32 gyro_sensitivity = 1000.0f;
+					m_gyro_yaw += gyro_raw * gyro_sensitivity;
+					const f32 tilt_sensitivity = 65000.0f;
+					m_gyro_pitch = std::atan2(m_accel_x, std::sqrt(m_accel_y * m_accel_y + m_accel_z * m_accel_z)) * tilt_sensitivity;
+
+					m_gyro_yaw = std::clamp(m_gyro_yaw, -32767.0f, 32767.0f);
+					m_gyro_pitch = std::clamp(m_gyro_pitch, -32767.0f, 32767.0f);
+					gc.gun_x = static_cast<s16>(m_gyro_yaw);
+					gc.gun_y = static_cast<s16>(m_gyro_pitch);
+					m_gun_x = gc.gun_x;
+					m_gun_y = gc.gun_y;
+				}
+			}
 		}
 	}
 
+	// Debug overlay for GunCon3 and Gyro/Accel values
+	if (g_cfg.io.pad_debug_overlay && m_controller_index == 0)
 	{
-		auto& mouse_handler = g_fxo->get<MouseHandlerBase>();
-		std::lock_guard mouse_lock(mouse_handler.mutex);
+		std::string text = fmt::format(
+			">     === GunCon3 Debug Info ===\n"
+			">\n"
+			">  Gyro Aiming:   %s\n"
+			">\n"
+			">      Gun X:   %6d\n"
+			">      Gun Y:   %6d\n"
+			">      Gun Z:   %6d\n"
+			">\n"
+			">  A-Stick X:   %6d\n"
+			">  A-Stick Y:   %6d\n"
+			">  B-Stick X:   %6d\n"
+			">  B-Stick Y:   %6d\n"
+			">\n"
+			">    Buttons:   T:%d A1:%d A2:%d A3:%d B1:%d B2:%d B3:%d C1:%d C2:%d\n"
+			">\n"
+			"> === Gyro/Accel Data ===\n"
+			">\n"
+			">  Gyro Yaw:   %8.2f\n"
+			"> Gyro Pitch:   %8.2f\n"
+			">\n"
+			">    Accel X:   %8.3f\n"
+			">    Accel Y:   %8.3f\n"
+			">    Accel Z:   %8.3f\n",
+			m_use_gyro_aiming ? "ON" : "OFF",
+			gc.gun_x, gc.gun_y, static_cast<s16>(gc.gun_z),
+			gc.stick_ax, gc.stick_ay,
+			gc.stick_bx, gc.stick_by,
+			gc.btn_trigger, gc.btn_a1, gc.btn_a2, gc.btn_a3,
+			gc.btn_b1, gc.btn_b2, gc.btn_b3,
+			gc.btn_c1, gc.btn_c2,
+			m_gyro_yaw, m_gyro_pitch,
+			m_accel_x, m_accel_y, m_accel_z
+		);
 
-		mouse_handler.Init(4);
+		rsx::overlays::set_debug_overlay_text(std::move(text));
+	}
 
-		const u32 mouse_index = g_cfg.io.mouse == mouse_handler::basic ? 0 : m_controller_index;
-		if (mouse_index >= mouse_handler.GetMice().size())
-		{
-			guncon3_encode(&gc, buf, m_key.data());
-			return;
-		}
+	// Draw cursor on screen to show aiming position
+	{
+		// Convert gun coordinates from -32767..+32767 to screen space
+		// gun_x/gun_y are in range [-32767, 32767], with 0,0 at center
+		// Screen space is [0, virtual_width] x [0, virtual_height]
+		const s16 screen_x = static_cast<s16>((gc.gun_x + 32767) * rsx::overlays::overlay::virtual_width / 65535);
+		const s16 screen_y = static_cast<s16>((gc.gun_y + 32767) * rsx::overlays::overlay::virtual_height / 65535);
 
-		const Mouse& mouse_data = ::at32(mouse_handler.GetMice(), mouse_index);
-		cfg->handle_input(mouse_data, input_callback);
+		// Red crosshair with 85% opacity
+		const color4f cursor_color = { 1.0f, 0.0f, 0.0f, 0.85f };
 
-		if (mouse_data.x_max <= 0 || mouse_data.y_max <= 0)
-		{
-			guncon3_encode(&gc, buf, m_key.data());
-			return;
-		}
-
-		// Expand 0..+wh to -32767..+32767
-		gc.gun_x = (mouse_data.x_pos * USHRT_MAX / mouse_data.x_max) - SHRT_MAX;
-		gc.gun_y = (mouse_data.y_pos * -USHRT_MAX / mouse_data.y_max) + SHRT_MAX;
+		// Use cursor_offset::last + controller_index for GunCon3 cursors
+		// This ensures they don't conflict with other cursor types
+		rsx::overlays::set_cursor(rsx::overlays::cursor_offset::last + m_controller_index, screen_x, screen_y, cursor_color, 2'000'000, false);
 	}
 
 	guncon3_encode(&gc, buf, m_key.data());
